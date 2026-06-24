@@ -17,11 +17,27 @@ import { QuestionCard } from "@/components/QuestionCard";
 import { StreakBadge } from "@/components/StreakBadge";
 import { useDSA } from "@/context/DSAContext";
 import { useColors } from "@/hooks/useColors";
+import {
+  hasUsageAccess,
+  hasOverlayPermission,
+  openUsageAccessSettings,
+  openOverlaySettings,
+} from "@/modules/app-blocker";
 
 export default function TodayScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { state, todayAssignment, backlogDays, isBlocked, markCompleted, markUncompleted, getQuestion, getTodayProgress } = useDSA();
+  const {
+    state,
+    todayAssignment,
+    backlogDays,
+    isBlocked,
+    hasAllPermissions,
+    markCompleted,
+    markUncompleted,
+    getQuestion,
+    getTodayProgress,
+  } = useDSA();
   const progress = getTodayProgress();
   const fadeIn = useRef(new Animated.Value(0)).current;
 
@@ -33,6 +49,10 @@ export default function TodayScreen() {
   const today = new Date();
   const dateStr = today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
   const allDone = progress.completed === progress.total && progress.total > 0;
+
+  const needsUsage = !hasUsageAccess();
+  const needsOverlay = !hasOverlayPermission();
+  const showPermSetup = Platform.OS === "android" && !hasAllPermissions;
 
   const handleBlockedPress = () => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
@@ -65,14 +85,89 @@ export default function TodayScreen() {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[
-          styles.content,
-          { paddingBottom: insets.bottom + 100 },
-        ]}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 100 }]}
         showsVerticalScrollIndicator={false}
       >
         <Animated.View style={{ opacity: fadeIn }}>
-          {/* Progress card */}
+
+          {/* ── Permissions setup card ──────────────────────────────────────── */}
+          {showPermSetup && (
+            <View style={[styles.permCard, { backgroundColor: "#1c2128", borderColor: "#f0883e60" }]}>
+              <View style={styles.permHeader}>
+                <Ionicons name="shield-outline" size={20} color="#f0883e" />
+                <Text style={[styles.permTitle, { fontFamily: "Inter_700Bold" }]}>
+                  Enable Real Instagram Blocking
+                </Text>
+              </View>
+              <Text style={[styles.permSub, { fontFamily: "Inter_400Regular" }]}>
+                Grant 2 permissions so DSA Grind can detect and block Instagram after 3 PM.
+              </Text>
+
+              {/* Usage Access */}
+              <Pressable
+                style={[
+                  styles.permRow,
+                  {
+                    backgroundColor: needsUsage ? "#21262d" : "#0d1117",
+                    borderColor: needsUsage ? "#f0883e60" : "#00ff8860",
+                  },
+                ]}
+                onPress={() => {
+                  if (needsUsage) openUsageAccessSettings();
+                }}
+              >
+                <Ionicons
+                  name={needsUsage ? "ellipse-outline" : "checkmark-circle"}
+                  size={22}
+                  color={needsUsage ? "#f0883e" : "#00ff88"}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.permRowTitle, { color: "#e6edf3", fontFamily: "Inter_600SemiBold" }]}>
+                    Usage Access
+                  </Text>
+                  <Text style={[styles.permRowSub, { fontFamily: "Inter_400Regular" }]}>
+                    Lets the app detect which app is open
+                  </Text>
+                </View>
+                {needsUsage && (
+                  <Text style={[styles.permBtn, { fontFamily: "Inter_600SemiBold" }]}>Grant →</Text>
+                )}
+              </Pressable>
+
+              {/* Overlay permission */}
+              <Pressable
+                style={[
+                  styles.permRow,
+                  {
+                    backgroundColor: needsOverlay ? "#21262d" : "#0d1117",
+                    borderColor: needsOverlay ? "#f0883e60" : "#00ff8860",
+                  },
+                ]}
+                onPress={() => {
+                  if (needsOverlay) openOverlaySettings();
+                }}
+              >
+                <Ionicons
+                  name={needsOverlay ? "ellipse-outline" : "checkmark-circle"}
+                  size={22}
+                  color={needsOverlay ? "#f0883e" : "#00ff88"}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.permRowTitle, { color: "#e6edf3", fontFamily: "Inter_600SemiBold" }]}>
+                    Display Over Other Apps
+                  </Text>
+                  <Text style={[styles.permRowSub, { fontFamily: "Inter_400Regular" }]}>
+                    Lets the app cover Instagram with a block screen
+                  </Text>
+                </View>
+                {needsOverlay && (
+                  <Text style={[styles.permBtn, { fontFamily: "Inter_600SemiBold" }]}>Grant →</Text>
+                )}
+              </Pressable>
+            </View>
+          )}
+
+          {/* ── Progress card ───────────────────────────────────────────────── */}
           <View
             style={[
               styles.progressCard,
@@ -107,7 +202,7 @@ export default function TodayScreen() {
             </View>
           </View>
 
-          {/* Backlog warning */}
+          {/* ── Backlog warning ─────────────────────────────────────────────── */}
           {backlogDays > 0 && (
             <Pressable
               style={[styles.backlogBanner, { backgroundColor: colors.destructive + "22", borderColor: colors.destructive + "60" }]}
@@ -121,7 +216,17 @@ export default function TodayScreen() {
             </Pressable>
           )}
 
-          {/* Today's questions */}
+          {/* ── Blocking active indicator ───────────────────────────────────── */}
+          {isBlocked && hasAllPermissions && (
+            <View style={[styles.blockingActive, { backgroundColor: "#ff000015", borderColor: "#f8514960" }]}>
+              <Ionicons name="ban" size={16} color="#f85149" />
+              <Text style={[styles.blockingActiveText, { fontFamily: "Inter_500Medium" }]}>
+                Instagram is actively blocked right now
+              </Text>
+            </View>
+          )}
+
+          {/* ── Today's questions ───────────────────────────────────────────── */}
           <Text style={[styles.sectionTitle, { color: colors.mutedForeground, fontFamily: "Inter_600SemiBold" }]}>
             TODAY'S PROBLEMS
           </Text>
@@ -138,11 +243,8 @@ export default function TodayScreen() {
                 showCheckbox
                 index={idx}
                 onToggleComplete={() => {
-                  if (isCompleted) {
-                    markUncompleted(qId);
-                  } else {
-                    markCompleted(qId);
-                  }
+                  if (isCompleted) markUncompleted(qId);
+                  else markCompleted(qId);
                 }}
               />
             );
@@ -176,6 +278,29 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 26 },
   scroll: { flex: 1 },
   content: { paddingTop: 20, paddingHorizontal: 20 },
+
+  permCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 16,
+    marginBottom: 14,
+    gap: 12,
+  },
+  permHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  permTitle: { fontSize: 15, color: "#f0883e" },
+  permSub: { fontSize: 13, color: "#8b949e", lineHeight: 18 },
+  permRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  permRowTitle: { fontSize: 14, marginBottom: 2 },
+  permRowSub: { fontSize: 12, color: "#8b949e" },
+  permBtn: { fontSize: 13, color: "#f0883e" },
+
   progressCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -199,6 +324,16 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   backlogText: { flex: 1, fontSize: 13 },
+  blockingActive: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 14,
+  },
+  blockingActiveText: { fontSize: 13, color: "#f85149" },
   sectionTitle: {
     fontSize: 11,
     letterSpacing: 1.2,
