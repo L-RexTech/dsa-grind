@@ -9,7 +9,6 @@ import android.provider.Settings
 import android.view.*
 import android.widget.*
 import androidx.core.app.NotificationCompat
-import kotlinx.coroutines.*
 
 class AppBlockerService : Service() {
 
@@ -17,12 +16,18 @@ class AppBlockerService : Service() {
         const val ACTION_START = "START"
         private const val CHANNEL_ID = "dsa_blocker"
         private const val NOTIF_ID = 7331
+        private const val POLL_MS = 1500L
     }
 
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val handler = Handler(Looper.getMainLooper())
     private var overlayView: View? = null
-    private var lastBlockedPkg = ""
+
+    private val pollRunnable = object : Runnable {
+        override fun run() {
+            tick()
+            handler.postDelayed(this, POLL_MS)
+        }
+    }
 
     private val windowManager by lazy {
         getSystemService(WINDOW_SERVICE) as WindowManager
@@ -43,55 +48,39 @@ class AppBlockerService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, buildNotification())
-        startMonitoring()
+        handler.post(pollRunnable)
         return START_STICKY
     }
 
     override fun onDestroy() {
-        scope.cancel()
-        handler.post { removeOverlay() }
+        handler.removeCallbacks(pollRunnable)
+        removeOverlay()
         super.onDestroy()
     }
 
-    // ── Monitoring loop ───────────────────────────────────────────────────────
-
-    private fun startMonitoring() {
-        scope.launch {
-            while (isActive) {
-                withContext(Dispatchers.Main) { tick() }
-                delay(1_500)
-            }
-        }
-    }
+    // ── Poll tick ─────────────────────────────────────────────────────────────
 
     private fun tick() {
         val active = prefs.getBoolean("blocking_active", false)
         if (!active) {
             removeOverlay()
-            lastBlockedPkg = ""
             return
         }
-
         val fg = getForegroundApp() ?: return
         val blocked = prefs.getStringSet("blocked_packages", emptySet()) ?: emptySet()
-        val ownPkg = packageName
 
-        if (fg in blocked && fg != ownPkg) {
-            if (overlayView == null) showOverlay(fg)
-        } else {
-            if (fg == ownPkg || fg !in blocked) {
-                removeOverlay()
-                lastBlockedPkg = ""
-            }
+        if (fg in blocked && fg != packageName) {
+            if (overlayView == null) showOverlay()
+        } else if (fg == packageName || fg !in blocked) {
+            removeOverlay()
         }
     }
 
     // ── Overlay ───────────────────────────────────────────────────────────────
 
-    private fun showOverlay(blockedPkg: String) {
+    private fun showOverlay() {
         if (!Settings.canDrawOverlays(this)) return
         if (overlayView != null) return
-        lastBlockedPkg = blockedPkg
 
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -102,14 +91,13 @@ class AppBlockerService : Service() {
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             type,
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                    or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         )
 
-        val view = buildOverlayView()
+        val view = buildView()
         overlayView = view
-        windowManager.addView(view, params)
+        try { windowManager.addView(view, params) } catch (_: Exception) { overlayView = null }
     }
 
     private fun removeOverlay() {
@@ -119,16 +107,19 @@ class AppBlockerService : Service() {
         }
     }
 
-    private fun buildOverlayView(): View {
+    private fun buildView(): View {
+        val d = resources.displayMetrics.density
+        fun dp(v: Int) = (v * d).toInt()
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setBackgroundColor(Color.parseColor("#EE0d1117"))
-            setPadding(dp(32), dp(32), dp(32), dp(32))
+            setBackgroundColor(Color.parseColor("#F00d1117"))
+            setPadding(dp(32), dp(48), dp(32), dp(48))
         }
 
         root.addView(TextView(this).apply {
-            text = "🔒"
+            text = "\uD83D\uDD12"          // 🔒
             textSize = 72f
             gravity = Gravity.CENTER
         })
@@ -138,8 +129,8 @@ class AppBlockerService : Service() {
             textSize = 26f
             setTextColor(Color.parseColor("#e6edf3"))
             gravity = Gravity.CENTER
-            setPadding(0, dp(20), 0, dp(10))
             typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(20), 0, dp(8))
         })
 
         root.addView(TextView(this).apply {
@@ -150,8 +141,12 @@ class AppBlockerService : Service() {
             setPadding(0, 0, 0, dp(40))
         })
 
-        root.addView(Button(this).apply {
-            text = "→  Go Solve Problems"
+        val btnParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        val btn = Button(this).apply {
+            text = "\u2192  Go Solve Problems"
             textSize = 16f
             setTextColor(Color.parseColor("#0d1117"))
             setBackgroundColor(Color.parseColor("#00ff88"))
@@ -161,32 +156,26 @@ class AppBlockerService : Service() {
                 prefs.edit().putBoolean("blocking_active", false).apply()
                 packageManager.getLaunchIntentForPackage(packageName)?.apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    startActivity(this)
+                    this@AppBlockerService.startActivity(this)
                 }
             }
-        })
-
+        }
+        root.addView(btn, btnParams)
         return root
     }
 
-    // ── UsageStats foreground app detection ───────────────────────────────────
+    // ── Foreground app detection via UsageStats ───────────────────────────────
 
     private fun getForegroundApp(): String? {
-        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
-            ?: return null
+        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager ?: return null
         val now = System.currentTimeMillis()
-        val stats = usm.queryUsageStats(
-            UsageStatsManager.INTERVAL_DAILY,
-            now - 10_000,
-            now
-        ) ?: return null
-        return stats
-            .filter { it.packageName != "android" }
-            .maxByOrNull { it.lastTimeUsed }
+        return usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, now - 10_000L, now)
+            ?.filter { it.packageName != "android" }
+            ?.maxByOrNull { it.lastTimeUsed }
             ?.packageName
     }
 
-    // ── Notification (required for foreground service) ────────────────────────
+    // ── Notification ──────────────────────────────────────────────────────────
 
     private fun buildNotification(): Notification {
         val pi = PendingIntent.getActivity(
@@ -196,7 +185,7 @@ class AppBlockerService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("DSA Grind is watching \uD83D\uDC40")
-            .setContentText("Apps will be blocked until your daily problems are solved")
+            .setContentText("Apps blocked until daily problems are solved")
             .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
             .setContentIntent(pi)
             .setSilent(true)
@@ -207,14 +196,9 @@ class AppBlockerService : Service() {
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val ch = NotificationChannel(
-                CHANNEL_ID,
-                "DSA Grind Blocker",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply { description = "Keeps the app blocker running" }
-            (getSystemService(NotificationManager::class.java)).createNotificationChannel(ch)
+                CHANNEL_ID, "DSA Grind Blocker", NotificationManager.IMPORTANCE_LOW
+            ).apply { description = "Keeps the app blocker running in background" }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
         }
     }
-
-    private fun dp(v: Int): Int =
-        (v * resources.displayMetrics.density).toInt()
 }
