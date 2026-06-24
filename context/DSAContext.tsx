@@ -190,6 +190,13 @@ export function DSAProvider({ children }: { children: React.ReactNode }) {
     longestStreak: 0,
   });
   const [loaded, setLoaded] = useState(false);
+  const [tick, setTick] = useState(0); // forces re-evaluation of isBlocked every minute
+
+  // Re-evaluate isBlocked every 60 seconds so the lock kicks in without needing a restart
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -332,8 +339,10 @@ export function DSAProvider({ children }: { children: React.ReactNode }) {
 
   const backlogDays = computeBacklog(state.assignments);
 
-  // A "blocked" state: backlog > 0, or today's progress is 0 and it's after 10pm
+  // A "blocked" state: backlog > 0, or not all solved and it's past 3pm.
+  // `tick` is referenced so re-renders happen every minute (from the interval above).
   const isBlocked = (() => {
+    void tick; // keep tick in scope so re-evaluation fires on each minute tick
     if (backlogDays > 0) return true;
     const hour = new Date().getHours();
     const progress = getTodayProgress();
