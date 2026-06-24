@@ -6,6 +6,14 @@ import React, {
   useEffect,
   useState,
 } from "react";
+import {
+  hasUsageAccess,
+  hasOverlayPermission,
+  startBlocker,
+  stopBlocker,
+} from "@/modules/app-blocker";
+
+const BLOCKED_APPS = ["com.instagram.android"];
 
 export type Difficulty = "Easy" | "Medium" | "Hard";
 export type Category =
@@ -52,6 +60,7 @@ interface DSAContextValue {
   todayAssignment: DailyAssignment | null;
   backlogDays: number;
   isBlocked: boolean;
+  hasAllPermissions: boolean;
   addQuestion: (q: Omit<DSAQuestion, "id">) => void;
   removeQuestion: (id: string) => void;
   editQuestion: (id: string, updates: Partial<Omit<DSAQuestion, "id">>) => void;
@@ -190,11 +199,17 @@ export function DSAProvider({ children }: { children: React.ReactNode }) {
     longestStreak: 0,
   });
   const [loaded, setLoaded] = useState(false);
-  const [tick, setTick] = useState(0); // forces re-evaluation of isBlocked every minute
+  const [tick, setTick] = useState(0);
+  const [hasAllPermissions, setHasAllPermissions] = useState(false);
 
-  // Re-evaluate isBlocked every 60 seconds so the lock kicks in without needing a restart
+  // Re-evaluate isBlocked and permission status every 60 seconds
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 60_000);
+    const check = () => {
+      setHasAllPermissions(hasUsageAccess() && hasOverlayPermission());
+      setTick((t) => t + 1);
+    };
+    check();
+    const id = setInterval(check, 60_000);
     return () => clearInterval(id);
   }, []);
 
@@ -357,6 +372,16 @@ export function DSAProvider({ children }: { children: React.ReactNode }) {
     }
   }, [loaded, generateTodayAssignment]);
 
+  // Start/stop native Instagram blocker service based on blocked state + permissions
+  useEffect(() => {
+    if (!loaded) return;
+    if (isBlocked && hasAllPermissions) {
+      startBlocker(BLOCKED_APPS);
+    } else {
+      stopBlocker();
+    }
+  }, [isBlocked, hasAllPermissions, loaded]);
+
   return (
     <DSAContext.Provider
       value={{
@@ -364,6 +389,7 @@ export function DSAProvider({ children }: { children: React.ReactNode }) {
         todayAssignment,
         backlogDays,
         isBlocked,
+        hasAllPermissions,
         addQuestion,
         removeQuestion,
         editQuestion,
