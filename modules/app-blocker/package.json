@@ -1,0 +1,11 @@
+{
+  "name": "@dsa-grind/app-blocker",
+  "version": "1.0.0",
+  "description": "Native Android app blocker module for DSA Grind",
+  "main": "index",
+  "files": [
+    "android",
+    "index.ts",
+    "expo-module.config.json"
+  ]
+}
